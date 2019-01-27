@@ -155,4 +155,9 @@ lower = beta - 1.96*SE
 upper = beta + 1.96*SE
 exp(cbind(lower, upper))
 
+
+# write two created data sets to github repo
+write_csv(combo_small, "combo_small")
+write_csv(master_logistic, "master_logistic")
+
 ```
