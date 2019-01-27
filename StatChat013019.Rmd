@@ -1,0 +1,158 @@
+---
+title: 'StatChat013019'
+output:
+  pdf_document:
+    fig_height: 3
+    fig_width: 4.5
+  html_document: default
+  word_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, setup, include=FALSE}
+library(tidyverse)
+library(stringr)
+trials <- read_csv("trials.csv")
+jurors <- read_csv("jurors.csv")
+voirdire <- read_csv("voir_dire_answers.csv")
+```
+
+```{r}
+# Find raw disparities in preemptory strikes from 225 trials with race data
+combo <- jurors %>%
+  left_join(trials, by = c("trial__id" = "id")) %>%
+  filter(race != "Unknown")
+
+combo %>% summarise(num_trials = n_distinct(trial__id))   # 226
+
+# Examine some categorical variables
+combo %>% count(struck_by)
+combo %>% count(race)
+combo %>% count(defendant_race)
+combo %>% count(verdict)
+combo %>% count(strike_eligibility)
+combo %>% count(def_attny_1)
+combo %>% count(offense_title_1)
+combo %>% count(cause_number)
+
+# Smaller version of combo to look at a few variables that might be associated
+#   with being struck by the state (assuming eligible to be struck by state)
+combo_small <- combo %>%
+  select(id, trial__id, struck_by, race, gender, defendant_race, 
+         strike_eligibility, cause_number) %>%
+  filter(strike_eligibility == "Both State and Defense" | 
+           strike_eligibility == "State") %>%
+  filter(race == "Black" | race == "White") %>%
+  mutate(same_race = ifelse(race == defendant_race, "same race", 
+                            "different race"),
+         struck_state = ifelse(struck_by == "Struck by the state", 
+                               "Struck by State", "Not struck by State"),
+         year = parse_number(str_sub(cause_number)))
+
+# Ratio of black prob to white prob is 4.45 = .498 / .112 (matches report)
+combo_small %>%
+  group_by(race) %>%
+  summarise(prop_struck = mean(struck_state == "Struck by State"),
+            num_struck = sum(struck_state == "Struck by State"),
+            total = n())
+
+ggplot(combo_small) +
+  geom_bar(aes(x = race, fill = struck_state), position = "fill")
+
+ggplot(combo_small) +
+  geom_bar(aes(x = race, fill = struck_state), position = "fill") +
+  facet_grid(. ~ same_race)
+
+ggplot(combo_small) +
+  geom_bar(aes(x = race, fill = struck_state), position = "fill") +
+  facet_grid(. ~ gender)
+
+# Look at patterns over time in strike ratio
+combo_small %>%
+  group_by(year, race) %>%
+  summarise(prop_struck = mean(struck_state == "Struck by State")) %>%
+  spread(key = "race", value = "prop_struck") %>%
+  mutate(ratio_prop_struck = Black / White) %>%
+  ggplot(aes(x = year, y = ratio_prop_struck)) +
+    geom_point() +
+    geom_smooth() +
+    geom_hline(yintercept = 1, color = "red") 
+
+# Histogram of jury composition by race
+combo %>%
+  filter(struck_by == "Juror chosen to serve on jury") %>%
+  group_by(trial__id) %>%
+  summarise(jurors = n(),
+            black = sum(race == "Black"),
+            white = sum(race == "White")) %>%
+  filter(jurors == 12) %>%
+  ggplot(aes(x = black)) +
+    geom_bar() +
+    geom_vline(xintercept = 4.8) +
+    scale_x_continuous(breaks = seq(0, 12, 1)) +
+    geom_text(x = 6.5, y = 15, label = "Proportion of blacks in district")
+```
+
+```{r}
+
+# Logistic regression analysis with voirdire data added
+
+# 89 trials represented in voirdire (not counting 1 with trial_id = NA),
+#   although 2 have n=1
+print(voirdire %>% count(juror_id__trial__id) %>% arrange(n), n = Inf)
+
+# all data for jurors in 89 trials with complete voir dire transcript
+master <- voirdire %>%
+  left_join(trials, by = c("juror_id__trial__id" = "id")) %>%
+  filter(!is.na(juror_id__trial__id)) %>%
+  left_join(jurors, by = c("juror_id" = "id"))
+
+# Confirm 89 trials
+master %>% summarise(num_trials = n_distinct(trial__id))
+
+# Examine some categorical variables
+master %>% count(struck_by)
+master %>% count(race)
+master %>% count(defendant_race)
+master %>% count(strike_eligibility)
+master %>% count(accused)
+master %>% count(fam_accused)
+master %>% count(death_hesitation)
+master %>% count(know_def)
+master %>% count(fam_law_enforcement)
+
+# Logistic regression data (note they combine White and Unknown races)
+master_logistic <- master %>%
+  select(juror_id, trial__id, struck_by, race, defendant_race, accused, 
+         fam_accused, know_def, fam_law_enforcement, death_hesitation,
+         strike_eligibility) %>%
+  filter(strike_eligibility == "Both State and Defense" | 
+           strike_eligibility == "State") %>%
+  mutate(same_race = ifelse(race == defendant_race, TRUE, FALSE),
+         struck_state = ifelse(struck_by == "Struck by the state", 1, 0),
+         is_black = ifelse(race == "Black", TRUE, FALSE))
+
+# Ratio of black prob to white prob is 4.68 = .534 / .114 (matches report)
+master_logistic %>%
+  group_by(is_black) %>%
+  summarise(prop_struck = mean(struck_state == 1),
+            num_struck = sum(struck_state == 1),
+            total = n())
+
+# logistic regression model
+model1 <- glm(struck_state ~ accused + is_black + fam_accused +
+  death_hesitation + know_def + same_race + fam_law_enforcement, 
+  family = binomial, data = master_logistic)
+summary(model1)
+exp(coef(model1))
+exp(confint(model1))
+
+# get Wald CIs to match report
+SE = summary(model1)$coefficients[,2]
+beta = summary(model1)$coefficients[,1]
+lower = beta - 1.96*SE
+upper = beta + 1.96*SE
+exp(cbind(lower, upper))
+
+```
